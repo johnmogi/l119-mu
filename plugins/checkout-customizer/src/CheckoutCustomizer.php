@@ -16,6 +16,18 @@ class CheckoutCustomizer {
         // Set default checkout fields
         add_filter('default_checkout_billing_id_number', '__return_empty_string');
         add_filter('default_checkout_billing_id_confirm', '__return_empty_string');
+        add_filter('default_checkout_billing_country', [$this, 'set_default_country']);
+        
+        // Force Israel as country during checkout
+        add_action('woocommerce_checkout_process', [$this, 'force_israel_country']);
+        add_action('woocommerce_checkout_update_order_meta', [$this, 'save_custom_fields']);
+        
+        // Remove country/state validation
+        add_filter('woocommerce_checkout_fields', [$this, 'remove_country_state_validation'], 9999);
+        add_filter('woocommerce_default_address_fields', [$this, 'remove_default_address_fields'], 9999);
+        
+        // Auto-login after purchase
+        add_action('woocommerce_thankyou', [$this, 'auto_login_after_purchase'], 10, 1);
         
         // Enqueue scripts and styles
         add_action('wp_enqueue_scripts', [$this, 'enqueue_assets']);
@@ -58,14 +70,8 @@ class CheckoutCustomizer {
             'class'       => ['form-row-wide'],
         ];
 
-        $fields['billing']['billing_country'] = [
-            'type'        => 'country',
-            'label'       => 'מדינה',
-            'priority'    => 40,
-            'required'    => true,
-            'class'       => ['form-row-first', 'address-field', 'update_totals_on_change'],
-            'clear'       => true
-        ];
+        // Remove country field entirely and set Israel as default
+        unset($fields['billing']['billing_country']);
 
         $fields['billing']['billing_address_1'] = [
             'label'       => 'כתובת',
@@ -91,25 +97,9 @@ class CheckoutCustomizer {
             'class'       => ['form-row-first', 'address-field'],
         ];
 
-        $fields['billing']['billing_state'] = [
-            'type'        => 'state',
-            'label'       => 'מדינה / מחוז',
-            'priority'    => 80,
-            'required'    => true,
-            'class'       => ['form-row-last', 'address-field'],
-            'clear'       => true,
-            'validate'    => ['state']
-        ];
+        // Remove state field entirely
+        unset($fields['billing']['billing_state']);
 
-        $fields['billing']['billing_postcode'] = [
-            'label'       => 'מיקוד',
-            'placeholder' => 'הזן את המיקוד שלך',
-            'priority'    => 90,
-            'required'    => true,
-            'class'       => ['form-row-first', 'address-field'],
-            'clear'       => true,
-            'validate'    => ['postcode']
-        ];
 
         // Phone field with no validation
         $fields['billing']['billing_phone'] = [
@@ -204,6 +194,10 @@ class CheckoutCustomizer {
             .form-row.promo_code_field {
                 display: none !important;
             }
+            
+            .form-row.hidden {
+                display: none !important;
+            }
         ');
     }
     
@@ -227,6 +221,118 @@ class CheckoutCustomizer {
 
         if ($id_number !== '' && $id_confirm !== '' && $id_number !== $id_confirm) {
             wc_add_notice('תעודת זהות ואימות אינם תואמים', 'error');
+        }
+    }
+    
+    /**
+     * Set default country to Israel
+     */
+    public function set_default_country() {
+        return 'IL';
+    }
+    
+    /**
+     * Force Israel as country during checkout
+     */
+    public function force_israel_country() {
+        $_POST['billing_country'] = 'IL';
+        $_POST['billing_state'] = '';
+    }
+    
+    /**
+     * Save custom fields to order meta
+     */
+    public function save_custom_fields($order_id) {
+        if (!empty($_POST['billing_id_number'])) {
+            update_post_meta($order_id, '_billing_id_number', sanitize_text_field($_POST['billing_id_number']));
+        }
+        if (!empty($_POST['billing_id_confirm'])) {
+            update_post_meta($order_id, '_billing_id_confirm', sanitize_text_field($_POST['billing_id_confirm']));
+        }
+    }
+    
+    /**
+     * Remove country/state validation completely
+     */
+    public function remove_country_state_validation($fields) {
+        // Completely remove country and state fields
+        unset($fields['billing']['billing_country']);
+        unset($fields['billing']['billing_state']);
+        unset($fields['shipping']['shipping_country']);
+        unset($fields['shipping']['shipping_state']);
+        
+        return $fields;
+    }
+    
+    /**
+     * Remove default address fields that cause validation errors
+     */
+    public function remove_default_address_fields($fields) {
+        unset($fields['country']);
+        unset($fields['state']);
+        return $fields;
+    }
+    
+    /**
+     * Auto-login user after successful purchase
+     */
+    public function auto_login_after_purchase($order_id) {
+        if (!$order_id) {
+            return;
+        }
+        
+        $order = wc_get_order($order_id);
+        if (!$order) {
+            return;
+        }
+        
+        // Get billing data
+        $phone = $order->get_billing_phone();
+        $id_number = $order->get_meta('_billing_id_number');
+        $email = $order->get_billing_email();
+        $first_name = $order->get_billing_first_name();
+        $last_name = $order->get_billing_last_name();
+        
+        if (empty($phone) || empty($id_number)) {
+            return;
+        }
+        
+        // Check if user already exists
+        $username = sanitize_user($phone);
+        $user = get_user_by('login', $username);
+        
+        if (!$user) {
+            // Create new user
+            $user_id = wp_create_user($username, $id_number, $email);
+            
+            if (is_wp_error($user_id)) {
+                return;
+            }
+            
+            // Update user meta
+            wp_update_user([
+                'ID' => $user_id,
+                'first_name' => $first_name,
+                'last_name' => $last_name,
+                'display_name' => $first_name . ' ' . $last_name
+            ]);
+            
+            // Add custom meta
+            update_user_meta($user_id, 'billing_phone', $phone);
+            update_user_meta($user_id, 'billing_id_number', $id_number);
+            
+            $user = get_user_by('ID', $user_id);
+        }
+        
+        // Auto-login the user
+        if ($user && !is_user_logged_in()) {
+            wp_clear_auth_cookie();
+            wp_set_current_user($user->ID);
+            wp_set_auth_cookie($user->ID, true);
+            
+            // Redirect to account page or course access
+            wp_safe_redirect(wc_get_account_endpoint_url('orders'));
+            exit;
         }
     }
 }
