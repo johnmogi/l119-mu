@@ -8,7 +8,14 @@ class CheckoutCustomizer {
         add_action('wp_loaded', [$this, 'remove_coupon_section']);
         
         // Customize checkout fields
-        add_filter('woocommerce_checkout_fields', [$this, 'customize_checkout_fields'], 9999);
+        add_filter('woocommerce_checkout_fields', [$this, 'customize_checkout_fields'], 999);
+        
+        // Add ID validation
+        add_action('woocommerce_after_checkout_validation', [$this, 'validate_id_fields']);
+        
+        // Set default checkout fields
+        add_filter('default_checkout_billing_id_number', '__return_empty_string');
+        add_filter('default_checkout_billing_id_confirm', '__return_empty_string');
         
         // Enqueue scripts and styles
         add_action('wp_enqueue_scripts', [$this, 'enqueue_assets']);
@@ -22,88 +29,136 @@ class CheckoutCustomizer {
     }
     
     public function customize_checkout_fields($fields) {
-        // Remove order comments
-        unset($fields['order']['order_comments']);
-        
         // Remove shipping fields
         unset($fields['shipping']);
-        
-        // Billing fields configuration
-        $fields['billing'] = [
-            'billing_first_name' => [
-                'label'       => '',
-                'placeholder' => 'שם פרטי',
-                'required'    => true,
-                'class'       => ['form-row-first'],
-                'priority'    => 10
-            ],
-            'billing_last_name' => [
-                'label'       => '',
-                'placeholder' => 'שם משפחה',
-                'required'    => true,
-                'class'       => ['form-row-last'],
-                'priority'    => 20
-            ],
-            'billing_phone' => [
-                'label'       => '',
-                'placeholder' => 'טלפון נייד (זיהוי משתמש)',
-                'required'    => true,
-                'class'       => ['form-row-first'],
-                'priority'    => 30,
-                'clear'       => true
-            ],
-            'phone_confirm' => [
-                'type'        => 'text',
-                'label'       => '',
-                'placeholder' => 'וידוא טלפון נייד',
-                'required'    => true,
-                'class'       => ['form-row-last'],
-                'priority'    => 40
-            ],
-            'id_number' => [
-                'type'        => 'text',
-                'label'       => '',
-                'placeholder' => 'תעודת זהות (סיסמה)',
-                'required'    => true,
-                'class'       => ['form-row-first'],
-                'priority'    => 50
-            ],
-            'id_confirm' => [
-                'type'        => 'text',
-                'label'       => '',
-                'placeholder' => 'וידוא תעודת זהות',
-                'required'    => true,
-                'class'       => ['form-row-last'],
-                'priority'    => 60
-            ],
-            'billing_email' => [
-                'label'       => '',
-                'placeholder' => 'אימייל לאישור',
-                'required'    => true,
-                'class'       => ['form-row-wide'],
-                'priority'    => 70,
-                'clear'       => true
-            ],
-            'school_code' => [
-                'type'        => 'text',
-                'label'       => '',
-                'placeholder' => 'קוד בית ספר (אופציונלי)',
-                'required'    => false,
-                'class'       => ['form-row-first'],
-                'priority'    => 80
-            ],
-            'class_number' => [
-                'type'        => 'text',
-                'label'       => '',
-                'placeholder' => 'מספר כיתה (אופציונלי)',
-                'required'    => false,
-                'class'       => ['form-row-last'],
-                'priority'    => 90
-            ]
+        unset($fields['order']['order_comments']);
+
+        // Customize billing fields
+        $fields['billing']['billing_first_name'] = [
+            'label'       => 'שם פרטי',
+            'placeholder' => 'הזן את שמך הפרטי',
+            'priority'    => 10,
+            'required'    => true,
+            'class'       => ['form-row-first'],
         ];
-        
+
+        $fields['billing']['billing_last_name'] = [
+            'label'       => 'שם משפחה',
+            'placeholder' => 'הזן את שם משפחתך',
+            'priority'    => 20,
+            'required'    => true,
+            'class'       => ['form-row-last'],
+        ];
+
+        $fields['billing']['billing_company'] = [
+            'label'       => 'שם החברה (אופציונלי)',
+            'placeholder' => 'הזן את שם החברה',
+            'priority'    => 30,
+            'required'    => false,
+            'class'       => ['form-row-wide'],
+        ];
+
+        $fields['billing']['billing_country'] = [
+            'type'        => 'country',
+            'label'       => 'מדינה',
+            'priority'    => 40,
+            'required'    => true,
+            'class'       => ['form-row-first', 'address-field', 'update_totals_on_change'],
+            'clear'       => true
+        ];
+
+        $fields['billing']['billing_address_1'] = [
+            'label'       => 'כתובת',
+            'placeholder' => 'הזן את כתובתך',
+            'priority'    => 50,
+            'required'    => true,
+            'class'       => ['form-row-wide', 'address-field'],
+        ];
+
+        $fields['billing']['billing_address_2'] = [
+            'label'       => 'דירה, דירה, יחידה וכו׳ (אופציונלי)',
+            'placeholder' => 'דירה, דירה, יחידה וכו׳ (אופציונלי)',
+            'priority'    => 60,
+            'required'    => false,
+            'class'       => ['form-row-wide', 'address-field'],
+        ];
+
+        $fields['billing']['billing_city'] = [
+            'label'       => 'עיר',
+            'placeholder' => 'הזן את העיר שלך',
+            'priority'    => 70,
+            'required'    => true,
+            'class'       => ['form-row-first', 'address-field'],
+        ];
+
+        $fields['billing']['billing_state'] = [
+            'type'        => 'state',
+            'label'       => 'מדינה / מחוז',
+            'priority'    => 80,
+            'required'    => true,
+            'class'       => ['form-row-last', 'address-field'],
+            'clear'       => true,
+            'validate'    => ['state']
+        ];
+
+        $fields['billing']['billing_postcode'] = [
+            'label'       => 'מיקוד',
+            'placeholder' => 'הזן את המיקוד שלך',
+            'priority'    => 90,
+            'required'    => true,
+            'class'       => ['form-row-first', 'address-field'],
+            'clear'       => true,
+            'validate'    => ['postcode']
+        ];
+
+        // Phone field with no validation
+        $fields['billing']['billing_phone'] = [
+            'label'       => 'טלפון',
+            'placeholder' => 'הזן את מספר הטלפון שלך',
+            'priority'    => 100,
+            'required'    => false, // Made not required
+            'class'       => ['form-row-last'],
+            'clear'       => true,
+            'type'        => 'text', // Changed from tel to text
+            'validate'    => [], // No validation
+        ];
+
+        $fields['billing']['billing_email'] = [
+            'label'       => 'כתובת אימייל',
+            'placeholder' => 'הזן את כתובת האימייל שלך',
+            'priority'    => 110,
+            'required'    => true,
+            'class'       => ['form-row-first'],
+            'validate'    => ['email']
+        ];
+
+        // Add ID number field
+        $fields['billing']['billing_id_number'] = [
+            'label'       => 'תעודת זהות',
+            'placeholder' => 'הזן את מספר תעודת הזהות שלך',
+            'priority'    => 120,
+            'required'    => true,
+            'class'       => ['form-row-first'],
+            'clear'       => true,
+            'type'        => 'text',
+            'validate'    => ['id_number']
+        ];
+
+        // Add ID confirmation field
+        $fields['billing']['billing_id_confirm'] = [
+            'label'       => 'אשר תעודת זהות',
+            'placeholder' => 'הזן שוב את מספר תעודת הזהות שלך',
+            'priority'    => 130,
+            'required'    => true,
+            'class'       => ['form-row-last'],
+            'clear'       => true,
+            'type'        => 'text',
+            'validate'    => ['id_confirm']
+        ];
+
         return $fields;
     }
+
     
     public function enqueue_assets() {
         if (!is_checkout()) {
@@ -150,5 +205,28 @@ class CheckoutCustomizer {
                 display: none !important;
             }
         ');
+    }
+    
+    
+    /**
+     * Validate custom ID fields during checkout submission
+     */
+    public function validate_id_fields() {
+        // phpcs:disable WordPress.Security.NonceVerification.Missing
+        $id_number     = isset($_POST['billing_id_number']) ? trim(wp_unslash($_POST['billing_id_number'])) : '';
+        $id_confirm    = isset($_POST['billing_id_confirm']) ? trim(wp_unslash($_POST['billing_id_confirm'])) : '';
+        // phpcs:enable
+
+        if ($id_number === '') {
+            wc_add_notice('חובה להזין תעודת זהות', 'error');
+        }
+
+        if ($id_confirm === '') {
+            wc_add_notice('חובה לאשר תעודת זהות', 'error');
+        }
+
+        if ($id_number !== '' && $id_confirm !== '' && $id_number !== $id_confirm) {
+            wc_add_notice('תעודת זהות ואימות אינם תואמים', 'error');
+        }
     }
 }

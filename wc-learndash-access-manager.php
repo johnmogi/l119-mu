@@ -108,6 +108,25 @@ class WC_LearnDash_Access_Manager {
             return;
         }
         
+        // Check if user is enrolled in the course via LearnDash
+        if (function_exists('learndash_user_get_enrolled_courses')) {
+            $user_courses = learndash_user_get_enrolled_courses($user_id);
+            if (in_array($course_id, $user_courses)) {
+                error_log("WC LearnDash Debug: User $user_id is enrolled in course $course_id via LearnDash - allowing access");
+                return; // User is enrolled, allow access
+            }
+        }
+        
+        // Check for recent purchase (grace period)
+        $recent_purchase_time = get_user_meta($user_id, 'lilac_recent_purchase_time', true);
+        if ($recent_purchase_time) {
+            $grace_period = 10 * 60; // 10 minutes
+            if ((current_time('timestamp') - $recent_purchase_time) < $grace_period) {
+                error_log("WC LearnDash Debug: User $user_id within grace period after recent purchase - allowing access");
+                return; // Within grace period, allow access
+            }
+        }
+        
         // For logged-in users, check expiration
         $expire_key = "course_{$course_id}_access_expires";
         $expires = get_user_meta($user_id, $expire_key, true);

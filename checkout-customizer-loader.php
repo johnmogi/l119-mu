@@ -12,7 +12,7 @@ if (!defined('WPINC')) {
 }
 
 // Define plugin constants
-define('CHECKOUT_CUSTOMIZER_PLUGIN_PATH', WPMU_PLUGIN_DIR . '/checkout-customizer/');
+define('CHECKOUT_CUSTOMIZER_PLUGIN_PATH', WPMU_PLUGIN_DIR . '/plugins/checkout-customizer/');
 
 // Check if the main plugin file exists
 $main_plugin_file = CHECKOUT_CUSTOMIZER_PLUGIN_PATH . 'checkout-customizer.php';

@@ -6,19 +6,84 @@
 
     // Document ready
     $(document).ready(function() {
+        const relaxPhoneUI = function() {
+            const $phone = $('input[name="billing_phone"]');
+            if ($phone.length) {
+                // Force text input and remove any validation artifacts
+                $phone.attr('type', 'text')
+                      .removeClass('validate-phone')
+                      .removeAttr('pattern')
+                      .removeAttr('inputmode')
+                      .removeAttr('aria-invalid')
+                      .removeAttr('required')
+                      .removeAttr('aria-required')
+                      .removeAttr('data-parsley-type')
+                      .removeAttr('data-validate')
+                      .removeClass('woocommerce-invalid')
+                      .removeClass('woocommerce-invalid-required-field');
+            }
+        };
+
         // Debug log
         console.log('Checkout Customizer JS loaded');
 
-        // Remove any coupon code links/buttons
+        // Run initial cleanup
+        const cleanupPhoneField = function() {
+            const $phone = $('input[name="billing_phone"]');
+            if ($phone.length) {
+                // Force text input and remove any validation artifacts
+                $phone.attr('type', 'text')
+                      .removeClass('validate-phone')
+                      .removeAttr('pattern')
+                      .removeAttr('inputmode')
+                      .removeAttr('aria-invalid')
+                      .removeAttr('required')
+                      .removeAttr('aria-required')
+                      .removeAttr('data-parsley-type')
+                      .removeAttr('data-validate')
+                      .removeClass('woocommerce-invalid')
+                      .removeClass('woocommerce-invalid-required-field')
+                      .removeClass('validate-required')
+                      .closest('.form-row').removeClass('woocommerce-invalid');
+                
+                // Remove any validation messages
+                $phone.siblings('.woocommerce-error').remove();
+            }
+        };
+
+        // Run on page load
+        cleanupPhoneField();
+
+        // Run on AJAX updates
+        $(document.body).on('updated_checkout', function() {
+            cleanupPhoneField();
+            
+            // Remove any coupon code links/buttons
+            $('.woocommerce-form-coupon-toggle, .showcoupon').remove();
+            
+            // Remove shipping fields if they somehow appear
+            $('#ship-to-different-address, .woocommerce-shipping-fields, .shipping_address').remove();
+            
+            // Remove any remaining labels
+            $('.woocommerce-billing-fields label:not(.woocommerce-form__label-for-checkbox)').text('');
+            
+            // Ensure placeholders are visible
+            $('.woocommerce-billing-fields input, .woocommerce-billing-fields textarea')
+                .attr('placeholder', function() {
+                    return $(this).attr('placeholder') || $(this).parent().find('label').text().trim();
+                });
+        });
+
+        // Run on form submission
+        $('form.checkout').on('checkout_place_order', function() {
+            cleanupPhoneField();
+            return true;
+        });
+
+        // Initial cleanup of UI elements
         $('.woocommerce-form-coupon-toggle, .showcoupon').remove();
-        
-        // Remove shipping fields if they somehow appear
         $('#ship-to-different-address, .woocommerce-shipping-fields, .shipping_address').remove();
-        
-        // Remove any remaining labels
         $('.woocommerce-billing-fields label:not(.woocommerce-form__label-for-checkbox)').text('');
-        
-        // Ensure placeholders are visible
         $('.woocommerce-billing-fields input, .woocommerce-billing-fields textarea')
             .attr('placeholder', function() {
                 return $(this).attr('placeholder') || $(this).parent().find('label').text().trim();
@@ -42,11 +107,20 @@
             .on('change input', function() {
                 console.log('Field changed:', $(this).attr('name'), 'Value:', $(this).val());
             });
+
+        // Ensure phone is always passable
+        relaxPhoneUI();
     });
     
-    // Run again after AJAX updates
+    // Run again after AJAX updates and on checkout update
     $(document).ajaxComplete(function() {
         $('.woocommerce-billing-fields label:not(.woocommerce-form__label-for-checkbox)').text('');
+        relaxPhoneUI();
+    });
+    
+    // Handle WooCommerce checkout updates
+    $(document.body).on('updated_checkout', function() {
+        relaxPhoneUI();
     });
     
 })(jQuery);
