@@ -47,7 +47,13 @@ class LearnDash {
         }
         
         // Use our access manager to check expiration
-        return $this->accessManager->hasCourseAccess($userId, $courseId);
+        $hasValidAccess = $this->accessManager->hasCourseAccess($userId, $courseId);
+        
+        if (!$hasValidAccess) {
+            $this->logDebug("Access denied for user {$userId} to course {$courseId} - expired or no access");
+        }
+        
+        return $hasValidAccess;
     }
     
     /**

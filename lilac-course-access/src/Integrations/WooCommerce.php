@@ -137,13 +137,31 @@ class WooCommerce {
      * Get courses associated with a product
      */
     private function getCoursesForProduct($productId) {
-        // Check LearnDash WooCommerce integration
-        $courses = get_post_meta($productId, '_related_course', false);
+        // Check multiple possible meta keys for course associations
+        $courses = [];
         
-        if (empty($courses)) {
-            // Fallback: check for custom meta
-            $courses = get_post_meta($productId, 'lilac_courses', false);
+        // Check LearnDash WooCommerce integration meta keys
+        $meta_keys = [
+            '_learndash_courses',     // Our custom meta
+            '_related_course',        // LearnDash WooCommerce
+            'lilac_courses',         // Legacy fallback
+            '_course_id'             // Another possible key
+        ];
+        
+        foreach ($meta_keys as $meta_key) {
+            $course_data = get_post_meta($productId, $meta_key, false);
+            if (!empty($course_data)) {
+                if (is_array($course_data[0])) {
+                    $courses = array_merge($courses, $course_data[0]);
+                } else {
+                    $courses = array_merge($courses, $course_data);
+                }
+                break; // Use first found meta key
+            }
         }
+        
+        // Log for debugging
+        $this->logDebug("Product {$productId} courses found: " . print_r($courses, true));
         
         return array_filter(array_map('intval', $courses));
     }

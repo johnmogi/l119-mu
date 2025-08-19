@@ -52,6 +52,9 @@ class WC_LearnDash_Access_Manager {
         add_action('woocommerce_order_status_completed', [$this, 'handle_order_completion']);
         add_action('woocommerce_payment_complete', [$this, 'handle_payment_completion']);
         
+        // Handle post-purchase redirection
+        add_action('woocommerce_thankyou', [$this, 'handle_post_purchase_redirect'], 10, 1);
+        
         // Add custom columns to product list
         add_filter('manage_edit-product_columns', [$this, 'add_product_columns']);
         add_action('manage_product_posts_custom_column', [$this, 'show_product_columns'], 10, 2);
@@ -527,9 +530,12 @@ class WC_LearnDash_Access_Manager {
             $product_id = $item->get_product_id();
             $duration = get_post_meta($product_id, '_learndash_access_duration', true);
             $custom_date = get_post_meta($product_id, '_learndash_custom_end_date', true);
-            $courses = get_post_meta($product_id, '_learndash_courses', true);
             
-            if ((!$duration && !$custom_date) || !$courses || !is_array($courses)) {
+            // Try multiple meta keys for course associations
+            $courses = $this->get_product_courses($product_id);
+            
+            if ((!$duration && !$custom_date) || empty($courses)) {
+                error_log("WC LearnDash: Product {$product_id} missing duration or courses. Duration: {$duration}, Courses: " . print_r($courses, true));
                 continue;
             }
             
@@ -604,6 +610,13 @@ class WC_LearnDash_Access_Manager {
         update_user_meta($user_id, $access_key, current_time('timestamp'));
         update_user_meta($user_id, $order_key, $order_id);
         
+        // Set grace period for recent purchase (10 minutes)
+        update_user_meta($user_id, 'lilac_recent_purchase_redirect', current_time('timestamp'));
+        
+        // Store the purchased course for redirection tracking
+        update_user_meta($user_id, 'lilac_last_purchased_course', $course_id);
+        update_user_meta($user_id, 'lilac_last_purchase_time', current_time('timestamp'));
+        
         if ($end_date > 0) {
             update_user_meta($user_id, $expire_key, $end_date);
         } else {
@@ -620,6 +633,109 @@ class WC_LearnDash_Access_Manager {
         if ($order) {
             $expire_note = $end_date > 0 ? ' (expires: ' . date('Y-m-d', $end_date) . ')' : ' (no expiration)';
             $order->add_order_note("LearnDash: Enrolled in '{$course_title}'{$expire_note}");
+        }
+    }
+    
+    /**
+     * Get courses associated with a product
+     */
+    private function get_product_courses($product_id) {
+        $courses = [];
+        
+        // Try multiple meta keys for course associations
+        $meta_keys = [
+            '_learndash_courses',     // Our custom meta
+            '_related_course',        // LearnDash WooCommerce
+            'lilac_courses',         // Legacy fallback
+            '_course_id'             // Another possible key
+        ];
+        
+        foreach ($meta_keys as $meta_key) {
+            $course_data = get_post_meta($product_id, $meta_key, true); // Get single value, not array
+            if (!empty($course_data)) {
+                error_log("WC LearnDash: Raw course data for product {$product_id} using meta key {$meta_key}: " . print_r($course_data, true));
+                
+                // Handle serialized data
+                if (is_string($course_data) && is_serialized($course_data)) {
+                    $unserialized = maybe_unserialize($course_data);
+                    if (is_array($unserialized)) {
+                        $courses = $unserialized;
+                    }
+                } elseif (is_array($course_data)) {
+                    $courses = $course_data;
+                } elseif (is_numeric($course_data)) {
+                    $courses = [$course_data];
+                }
+                
+                error_log("WC LearnDash: Processed courses for product {$product_id}: " . print_r($courses, true));
+                break;
+            }
+        }
+        
+        $final_courses = array_filter(array_map('intval', $courses));
+        error_log("WC LearnDash: Final courses for product {$product_id}: " . print_r($final_courses, true));
+        
+        return $final_courses;
+    }
+    
+    /**
+     * Handle post-purchase redirection to correct course
+     */
+    public function handle_post_purchase_redirect($order_id) {
+        if (!$order_id) {
+            return;
+        }
+        
+        $order = wc_get_order($order_id);
+        if (!$order) {
+            return;
+        }
+        
+        $user_id = $order->get_user_id();
+        if (!$user_id) {
+            return;
+        }
+        
+        // Get the first course from the order for redirection
+        $redirect_course_id = null;
+        
+        foreach ($order->get_items() as $item) {
+            $product_id = $item->get_product_id();
+            $courses = $this->get_product_courses($product_id);
+            
+            if (!empty($courses)) {
+                $redirect_course_id = $courses[0]; // Use first course for redirection
+                break;
+            }
+        }
+        
+        if ($redirect_course_id) {
+            // Store redirection info
+            update_user_meta($user_id, 'lilac_redirect_course_id', $redirect_course_id);
+            update_user_meta($user_id, 'lilac_redirect_timestamp', current_time('timestamp'));
+            
+            $course_url = get_permalink($redirect_course_id);
+            error_log("WC LearnDash: Setting up redirect for user {$user_id} to course {$redirect_course_id} ({$course_url}) after order {$order_id}");
+            
+            // Verify we have the correct course URL
+            if (empty($course_url) || $course_url === false) {
+                error_log("WC LearnDash: ERROR - Could not get permalink for course {$redirect_course_id}");
+                return;
+            }
+            
+            // Add JavaScript redirect with delay - use closure to capture variables
+            $self = $this;
+            add_action('wp_footer', function() use ($course_url, $redirect_course_id, $user_id, $order_id) {
+                ?>
+                <script>
+                console.log('WC LearnDash: Redirecting user <?php echo $user_id; ?> to course <?php echo $redirect_course_id; ?>: <?php echo esc_js($course_url); ?>');
+                console.log('WC LearnDash: Order ID: <?php echo $order_id; ?>');
+                setTimeout(function() {
+                    window.location.href = '<?php echo esc_js($course_url); ?>';
+                }, 3000); // 3 second delay
+                </script>
+                <?php
+            });
         }
     }
     
