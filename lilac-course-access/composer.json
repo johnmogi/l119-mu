@@ -1,0 +1,24 @@
+{
+    "name": "lilac/course-access",
+    "description": "Enhanced Course Access Manager for LearnDash and WooCommerce integration",
+    "type": "wordpress-muplugin",
+    "license": "GPL-2.0-or-later",
+    "authors": [
+        {
+            "name": "Lilac Learning",
+            "email": "info@lilac-learning.com"
+        }
+    ],
+    "require": {
+        "php": ">=7.4"
+    },
+    "autoload": {
+        "psr-4": {
+            "Lilac\\CourseAccess\\": "src/"
+        }
+    },
+    "config": {
+        "optimize-autoloader": true,
+        "sort-packages": true
+    }
+}

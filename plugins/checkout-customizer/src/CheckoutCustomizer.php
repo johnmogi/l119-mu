@@ -24,15 +24,15 @@ class CheckoutCustomizer {
         
         // Remove country/state validation
         add_filter('woocommerce_checkout_fields', [$this, 'remove_country_state_validation'], 9999);
-        add_filter('woocommerce_default_address_fields', [$this, 'remove_default_address_fields'], 9999);
         
-        // Remove postcode validation
-        add_filter('woocommerce_validate_postcode', '__return_true', PHP_INT_MAX);
+        // Create user and associate with order BEFORE other hooks run
+        add_action('woocommerce_checkout_order_processed', [$this, 'create_user_and_associate_order'], 1);
         
-        // Auto-login after purchase
-        add_action('woocommerce_thankyou', [$this, 'auto_login_after_purchase'], 10, 1);
-        add_action('woocommerce_payment_complete', [$this, 'auto_login_after_purchase'], 10, 1);
-        add_action('woocommerce_order_status_completed', [$this, 'auto_login_after_purchase'], 10, 1);
+        // Auto-login hooks - multiple hooks to ensure it works
+        add_action('woocommerce_order_status_completed', [$this, 'auto_login_after_purchase'], 5);
+        add_action('woocommerce_payment_complete', [$this, 'auto_login_after_purchase'], 5);
+        add_action('woocommerce_order_status_processing', [$this, 'auto_login_after_purchase'], 5);
+        add_action('woocommerce_order_status_on-hold', [$this, 'auto_login_after_purchase'], 5);
         
         // Enqueue scripts and styles
         add_action('wp_enqueue_scripts', [$this, 'enqueue_assets']);
@@ -267,11 +267,95 @@ class CheckoutCustomizer {
         unset($fields['country']);
         unset($fields['state']);
         unset($fields['postcode']);
+        
         return $fields;
     }
     
     /**
-     * Auto-login user after successful purchase
+     * Create user and associate with order BEFORE other hooks run
+     */
+    public function create_user_and_associate_order($order_id) {
+        error_log('=== CREATE USER AND ASSOCIATE ORDER START ===');
+        error_log('Order processed: ' . $order_id);
+        
+        if (!$order_id) {
+            error_log('No order ID provided');
+            return;
+        }
+        
+        $order = wc_get_order($order_id);
+        if (!$order) {
+            error_log('Order not found for ID: ' . $order_id);
+            return;
+        }
+        
+        // Get billing data
+        $phone = $order->get_billing_phone();
+        $id_number = get_post_meta($order_id, '_billing_id_number', true);
+        if (empty($id_number)) {
+            $id_number = $order->get_meta('_billing_id_number');
+        }
+        $email = $order->get_billing_email();
+        $first_name = $order->get_billing_first_name();
+        $last_name = $order->get_billing_last_name();
+        
+        error_log('Order data: Phone=' . $phone . ', ID=' . $id_number . ', Email=' . $email);
+        
+        if (empty($phone) || empty($id_number)) {
+            error_log('Missing required data - Phone: ' . $phone . ', ID: ' . $id_number);
+            return;
+        }
+        
+        // Check if user already exists
+        $username = sanitize_user($phone);
+        $user = get_user_by('login', $username);
+        
+        if (!$user) {
+            error_log('Creating new user with username: ' . $username);
+            
+            // Create new user
+            $user_id = wp_create_user($username, $id_number, $email);
+            
+            if (is_wp_error($user_id)) {
+                error_log('Error creating user: ' . $user_id->get_error_message());
+                return;
+            }
+            
+            error_log('User created with ID: ' . $user_id);
+            
+            // Update user meta
+            wp_update_user([
+                'ID' => $user_id,
+                'first_name' => $first_name,
+                'last_name' => $last_name,
+                'display_name' => $first_name . ' ' . $last_name
+            ]);
+            
+            // Add custom meta
+            update_user_meta($user_id, 'billing_phone', $phone);
+            update_user_meta($user_id, 'billing_id_number', $id_number);
+            
+            $user = get_user_by('ID', $user_id);
+        } else {
+            error_log('User already exists: ' . $user->ID);
+        }
+        
+        // Associate user with order
+        if ($user) {
+            $order->set_customer_id($user->ID);
+            $order->save();
+            error_log('Order ' . $order_id . ' associated with user ' . $user->ID);
+            
+            // Set grace period for immediate access
+            update_user_meta($user->ID, 'lilac_recent_purchase_time', current_time('timestamp'));
+            error_log('Grace period set for user ' . $user->ID);
+        }
+        
+        error_log('=== CREATE USER AND ASSOCIATE ORDER END ===');
+    }
+
+    /**
+     * Auto-login after purchase
      */
     public function auto_login_after_purchase($order_id) {
         error_log('=== AUTO-LOGIN DEBUG START ===');
@@ -375,15 +459,31 @@ class CheckoutCustomizer {
                 error_log('Auto-login: Login failed - user ID mismatch');
             }
             
-            // Add JavaScript redirect
-            add_action('wp_footer', function() {
-                echo '<script type="text/javascript">
-                    console.log("Auto-login: Redirecting to account page");
-                    setTimeout(function() {
-                        window.location.href = "' . home_url('/my-account/orders/') . '";
-                    }, 2000);
-                </script>';
-            });
+            // Get purchased course and redirect to it
+            $purchased_course_id = $this->get_purchased_course_id($order_id);
+            if ($purchased_course_id) {
+                $course_url = get_permalink($purchased_course_id);
+                error_log('Auto-login: Redirecting to purchased course: ' . $course_url);
+                
+                add_action('wp_footer', function() use ($course_url) {
+                    echo '<script type="text/javascript">
+                        console.log("Auto-login: Redirecting to purchased course");
+                        setTimeout(function() {
+                            window.location.href = "' . esc_url($course_url) . '";
+                        }, 2000);
+                    </script>';
+                });
+            } else {
+                error_log('Auto-login: No course found, redirecting to account page');
+                add_action('wp_footer', function() {
+                    echo '<script type="text/javascript">
+                        console.log("Auto-login: Redirecting to account page");
+                        setTimeout(function() {
+                            window.location.href = "' . home_url('/my-account/orders/') . '";
+                        }, 2000);
+                    </script>';
+                });
+            }
             
         } else if (is_user_logged_in()) {
             error_log('Auto-login: User already logged in');
@@ -392,5 +492,28 @@ class CheckoutCustomizer {
         }
         
         error_log('=== AUTO-LOGIN DEBUG END ===');
+    }
+    
+    /**
+     * Get the first purchased course ID from an order
+     */
+    private function get_purchased_course_id($order_id) {
+        $order = wc_get_order($order_id);
+        if (!$order) {
+            return null;
+        }
+        
+        foreach ($order->get_items() as $item) {
+            $product_id = $item->get_product_id();
+            $courses = get_post_meta($product_id, '_learndash_courses', true);
+            
+            if ($courses && is_array($courses) && !empty($courses)) {
+                error_log('Found course ID ' . $courses[0] . ' for product ' . $product_id);
+                return $courses[0]; // Return first course
+            }
+        }
+        
+        error_log('No courses found for order ' . $order_id);
+        return null;
     }
 }

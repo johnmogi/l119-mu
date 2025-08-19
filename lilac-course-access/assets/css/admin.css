@@ -1,0 +1,101 @@
+/* Lilac Course Access Admin Styles */
+
+.wrap {
+    max-width: 1200px;
+}
+
+/* Status Badges */
+.course-access-status {
+    display: inline-block;
+    padding: 3px 8px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.status-active {
+    background: #e8f5e9;
+    color: #2e7d32;
+    border: 1px solid #c8e6c9;
+}
+
+.status-expiring {
+    background: #fff8e1;
+    color: #ff8f00;
+    border: 1px solid #ffe082;
+}
+
+.status-expired {
+    background: #ffebee;
+    color: #c62828;
+    border: 1px solid #ef9a9a;
+}
+
+.status-permanent {
+    background: #e3f2fd;
+    color: #1565c0;
+    border: 1px solid #90caf9;
+}
+
+/* Course Access Items */
+.course-access-item {
+    margin-bottom: 10px;
+    padding: 10px;
+    background: #f9f9f9;
+    border-left: 3px solid #ddd;
+    border-radius: 3px;
+}
+
+.course-access-item h4 {
+    margin: 0 0 5px 0;
+    font-size: 14px;
+}
+
+.course-access-meta {
+    font-size: 12px;
+    color: #666;
+    margin-bottom: 5px;
+}
+
+.course-access-actions {
+    margin-top: 5px;
+}
+
+/* Loading States */
+.loading {
+    text-align: center;
+    padding: 20px;
+    color: #666;
+}
+
+.loading .spinner {
+    float: none;
+    margin: 0 5px 0 0;
+}
+
+/* Dialogs */
+#expiration-preview {
+    margin: 15px 0;
+    padding: 10px;
+    background: #f6f7f7;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+
+/* Row Actions */
+.row-actions {
+    visibility: hidden;
+    font-size: 12px;
+}
+
+tr:hover .row-actions {
+    visibility: visible;
+}
+
+/* Empty States */
+.no-courses {
+    color: #666;
+    font-style: italic;
+}
