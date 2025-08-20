@@ -66,10 +66,20 @@ class WC_LearnDash_Access_Manager {
         add_action('show_user_profile', [$this, 'show_user_access_fields']);
         add_action('edit_user_profile', [$this, 'show_user_access_fields']);
         
-        // Course access control system
-        add_action('template_redirect', [$this, 'check_course_access_on_load']);
-        add_filter('the_content', [$this, 'filter_course_content'], 999);
-        add_filter('learndash_course_content', [$this, 'filter_course_content'], 999);
+        // Add course access control hooks
+        add_filter('learndash_user_can_bypass_course_limits', [$this, 'check_course_access_limits'], 10, 4);
+        add_filter('learndash_content', [$this, 'filter_expired_course_content'], 10, 2);
+        
+        // Additional access control hooks
+        add_filter('sfwd_lms_has_access', [$this, 'filter_course_access'], 10, 3);
+        add_action('template_redirect', [$this, 'redirect_expired_course_access'], 5);
+        
+        // Block LearnDash course access at multiple levels
+        add_filter('learndash_user_has_course_access', [$this, 'check_user_course_access'], 10, 3);
+        add_filter('learndash_course_access_from', [$this, 'filter_course_access_from'], 10, 3);
+        add_filter('learndash_lesson_access_from', [$this, 'filter_lesson_access'], 10, 4);
+        add_filter('learndash_topic_access_from', [$this, 'filter_topic_access'], 10, 4);
+        add_filter('learndash_quiz_access_from', [$this, 'filter_quiz_access'], 10, 4);
         
         // Debug action to verify plugin is loading
         add_action('admin_init', [$this, 'debug_plugin_loaded']);
@@ -585,24 +595,14 @@ class WC_LearnDash_Access_Manager {
      * Enroll user in LearnDash course with access control
      */
     private function enroll_user_in_course($user_id, $course_id, $end_date, $order_id, $trigger = '') {
-        // Use LearnDash function to enroll user
-        if (function_exists('ld_update_course_access')) {
-            ld_update_course_access($user_id, $course_id, false);
-            error_log("WC LearnDash: Used ld_update_course_access for user {$user_id}, course {$course_id}");
-        } else {
-            // Fallback: manually add user meta
-            $enrolled_courses = get_user_meta($user_id, '_sfwd-course_progress', true);
-            if (!is_array($enrolled_courses)) {
-                $enrolled_courses = [];
-            }
-            if (!isset($enrolled_courses[$course_id])) {
-                $enrolled_courses[$course_id] = ['completed' => 0, 'total' => 0];
-                update_user_meta($user_id, '_sfwd-course_progress', $enrolled_courses);
-            }
-            error_log("WC LearnDash: Used fallback enrollment for user {$user_id}, course {$course_id}");
-        }
+        // Remove existing access first to ensure clean state
+        ld_update_course_access($user_id, $course_id, $remove = true);
+        error_log("[Lilac Course Access] LearnDash access updated for user {$user_id}, course {$course_id}, access: removed");
         
-        // Set custom access metadata
+        // Add the user to the course
+        ld_update_course_access($user_id, $course_id, $remove = false);
+        
+        // Set expiration date in user meta
         $access_key = "course_{$course_id}_access_from";
         $expire_key = "course_{$course_id}_access_expires";
         $order_key = "course_{$course_id}_order_id";
@@ -623,6 +623,9 @@ class WC_LearnDash_Access_Manager {
             delete_user_meta($user_id, $expire_key); // Remove expiration if set to permanent
         }
         
+        // Also populate the lilac_user_subscriptions table for dashboard display
+        $this->update_user_subscription_record($user_id, $course_id, $end_date, $order_id);
+        
         // Log enrollment
         $course_title = get_the_title($course_id);
         $expire_text = $end_date > 0 ? date('Y-m-d H:i:s', $end_date) : 'No expiration';
@@ -633,6 +636,67 @@ class WC_LearnDash_Access_Manager {
         if ($order) {
             $expire_note = $end_date > 0 ? ' (expires: ' . date('Y-m-d', $end_date) . ')' : ' (no expiration)';
             $order->add_order_note("LearnDash: Enrolled in '{$course_title}'{$expire_note}");
+        }
+    }
+    
+    /**
+     * Update user subscription record in lilac_user_subscriptions table
+     */
+    private function update_user_subscription_record($user_id, $course_id, $end_date, $order_id) {
+        global $wpdb;
+        
+        $table_name = $wpdb->prefix . 'lilac_user_subscriptions';
+        
+        // Get product ID from order
+        $product_id = 0;
+        $duration_days = 0;
+        
+        $order = wc_get_order($order_id);
+        if ($order) {
+            foreach ($order->get_items() as $item) {
+                $item_product_id = $item->get_product_id();
+                $courses = $this->get_product_courses($item_product_id);
+                
+                if (in_array($course_id, $courses)) {
+                    $product_id = $item_product_id;
+                    
+                    // Calculate duration in days
+                    $start_time = current_time('timestamp');
+                    if ($end_date > 0) {
+                        $duration_days = ceil(($end_date - $start_time) / DAY_IN_SECONDS);
+                    }
+                    break;
+                }
+            }
+        }
+        
+        // Check if record already exists
+        $existing = $wpdb->get_row($wpdb->prepare(
+            "SELECT id FROM $table_name WHERE user_id = %d AND course_id = %d AND order_id = %d",
+            $user_id, $course_id, $order_id
+        ));
+        
+        $data = array(
+            'user_id' => $user_id,
+            'product_id' => $product_id,
+            'course_id' => $course_id,
+            'access_started' => current_time('mysql'),
+            'access_expires' => $end_date > 0 ? date('Y-m-d H:i:s', $end_date) : '0000-00-00 00:00:00',
+            'duration_days' => $duration_days,
+            'status' => 'active',
+            'order_id' => $order_id,
+            'updated_at' => current_time('mysql')
+        );
+        
+        if ($existing) {
+            // Update existing record
+            $wpdb->update($table_name, $data, array('id' => $existing->id));
+            error_log("WC LearnDash: Updated subscription record for user {$user_id}, course {$course_id}");
+        } else {
+            // Insert new record
+            $data['created_at'] = current_time('mysql');
+            $wpdb->insert($table_name, $data);
+            error_log("WC LearnDash: Created subscription record for user {$user_id}, course {$course_id}");
         }
     }
     
@@ -737,6 +801,124 @@ class WC_LearnDash_Access_Manager {
                 <?php
             });
         }
+    }
+    
+    /**
+     * Filter course access based on expiration
+     */
+    public function filter_course_access($hasAccess, $postId, $userId) {
+        if (!$hasAccess || !$userId) {
+            return $hasAccess;
+        }
+        
+        // Check if this is a course
+        if (get_post_type($postId) !== 'sfwd-courses') {
+            return $hasAccess;
+        }
+        
+        // Check expiration
+        $expire_key = "course_{$postId}_access_expires";
+        $expires = get_user_meta($userId, $expire_key, true);
+        
+        if ($expires && $expires > 0 && $expires < current_time('timestamp')) {
+            error_log("WC LearnDash: Access denied for user {$userId} to course {$postId} - expired on " . date('Y-m-d H:i:s', $expires));
+            return false;
+        }
+        
+        return $hasAccess;
+    }
+    
+    /**
+     * Redirect expired course access
+     */
+    public function redirect_expired_course_access() {
+        if (!is_singular('sfwd-courses') || !is_user_logged_in()) {
+            return;
+        }
+        
+        global $post;
+        $userId = get_current_user_id();
+        $courseId = $post->ID;
+        
+        // Check expiration
+        $expire_key = "course_{$courseId}_access_expires";
+        $expires = get_user_meta($userId, $expire_key, true);
+        
+        if ($expires && $expires > 0 && $expires < current_time('timestamp')) {
+            error_log("WC LearnDash: Redirecting expired user {$userId} from course {$courseId}");
+            wp_redirect(home_url('/shop/'));
+            exit;
+        }
+    }
+    
+    /**
+     * Check user course access at LearnDash level
+     */
+    public function check_user_course_access($hasAccess, $courseId, $userId) {
+        if (!$hasAccess || !$userId) {
+            return $hasAccess;
+        }
+        
+        return $this->check_course_expiration($userId, $courseId, 'learndash_user_has_course_access');
+    }
+    
+    /**
+     * Filter course access from
+     */
+    public function filter_course_access_from($hasAccess, $courseId, $userId) {
+        if (!$hasAccess || !$userId) {
+            return $hasAccess;
+        }
+        
+        return $this->check_course_expiration($userId, $courseId, 'learndash_course_access_from');
+    }
+    
+    /**
+     * Filter lesson access
+     */
+    public function filter_lesson_access($hasAccess, $lessonId, $userId, $courseId) {
+        if (!$hasAccess || !$userId || !$courseId) {
+            return $hasAccess;
+        }
+        
+        return $this->check_course_expiration($userId, $courseId, 'learndash_lesson_access_from');
+    }
+    
+    /**
+     * Filter topic access
+     */
+    public function filter_topic_access($hasAccess, $topicId, $userId, $courseId) {
+        if (!$hasAccess || !$userId || !$courseId) {
+            return $hasAccess;
+        }
+        
+        return $this->check_course_expiration($userId, $courseId, 'learndash_topic_access_from');
+    }
+    
+    /**
+     * Filter quiz access
+     */
+    public function filter_quiz_access($hasAccess, $quizId, $userId, $courseId) {
+        if (!$hasAccess || !$userId || !$courseId) {
+            return $hasAccess;
+        }
+        
+        return $this->check_course_expiration($userId, $courseId, 'learndash_quiz_access_from');
+    }
+    
+    /**
+     * Central method to check course expiration
+     */
+    private function check_course_expiration($userId, $courseId, $hook) {
+        $expire_key = "course_{$courseId}_access_expires";
+        $expires = get_user_meta($userId, $expire_key, true);
+        
+        if ($expires && $expires > 0 && $expires < current_time('timestamp')) {
+            error_log("WC LearnDash: Access denied for user {$userId} to course {$courseId} via {$hook} - expired on " . date('Y-m-d H:i:s', $expires));
+            return false;
+        }
+        
+        return true;
     }
     
     /**
